@@ -137,7 +137,7 @@ class AgentHelpler:
             )
 
         elif engine in ["vllm"]:
-            if url.ednswith("/v1"):
+            if url.endswith("/v1"):
                 url = url[:-3]
             self.client = OpenAI(
                 api_key=self.api_key,
@@ -148,6 +148,13 @@ class AgentHelpler:
             self.client = OpenAI(
                 api_key=self.api_key,
                 base_url="https://api.siliconflow.cn/v1",
+            )
+
+        elif engine in ["groq"]:
+            # https://console.groq.com (OpenAI-compatible endpoint)
+            self.client = OpenAI(
+                api_key=self.api_key,
+                base_url="https://api.groq.com/openai/v1",
             )
 
         elif engine in ["zhipuai"]:
@@ -163,14 +170,27 @@ class AgentHelpler:
         # logger.warning(temperature)
 
         if temperature is None:
-            temperature = AgentHelpler.temp
+            temperature = getattr(AgentHelpler, "temp", 0.7)
+        # Only sent when explicitly set (e.g. gpt-oss reasoning models);
+        # omitted for models like Llama that reject the parameter.
+        extra_kwargs = {}
+        if getattr(self, "reasoning_effort", None):
+            extra_kwargs["reasoning_effort"] = self.reasoning_effort
         while retry > 0:
-            response = self.client.chat.completions.create(
-                model=llm_name,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=8000
-                )
+            try:
+                response = self.client.chat.completions.create(
+                    model=llm_name,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=getattr(self, "max_tokens", 8000),
+                    **extra_kwargs
+                    )
+            except Exception as e:
+                wait = 2 ** (4 - retry) * 15
+                logger.warning(f"API error ({type(e).__name__}), waiting {wait}s: {e}")
+                sleep(wait)
+                retry -= 1
+                continue
             # logger.error(temperature)
             out = response.choices[0].message.content
             
@@ -202,6 +222,8 @@ class Agent(AgentHelpler):
         self.engine = args.model
         self.llm_name = args.llm_name
         self.url = args.url
+        self.max_tokens = getattr(args, "max_tokens", 8000)
+        self.reasoning_effort = getattr(args, "reasoning_effort", None)
 
         self.logger = logger
         self.retry_times = retry_times
@@ -219,6 +241,7 @@ class Agent(AgentHelpler):
     def __del__(self):
         if self.args.debug:
             message_file = Path(__file__).parent.joinpath("output", datetime.now().strftime('%Y%m%d'), self.args.dataset, f"debug_{self.agent_name}.json")
+            message_file.parent.mkdir(parents=True, exist_ok=True)
             with open(message_file, "w", encoding="utf-8") as f:
                 json.dump(self.history, f, ensure_ascii=False, indent=4)
         

@@ -8,8 +8,11 @@ import pandas as pd
 import json
 
 import wandb
+from dotenv import load_dotenv
 # from search.utils.utils import get_args
 from random import randint
+
+load_dotenv()
 
 from util.agent import (
     LogicAgent,
@@ -188,12 +191,10 @@ def run_single_exp(question, fewshots_data, args, label, problem_index, output_p
 def run_single_basiline(question, fewshots_data, args, label, problem_index, output_path,retry_all=[0],make_decision_num=[0]):
     log_list = []
     agent = Agent(
-        "You are a medical expert. Answer the question based on the knowledge you have.",
-        engine=args.model,
-        llm_name=args.llm_name,
+        args=args,
+        system_instruction="You are a medical expert. Answer the question based on the knowledge you have.",
         agent_name='BaselineAgent',
         logger=log_list,
-        port=args.port,
     )
     
     message = baseline_template.format(
@@ -254,6 +255,7 @@ def get_args():
             "openai",
             "deepseek",
             "zhipuai",
+            "groq",
         ],
     )
     parser.add_argument(
@@ -278,6 +280,13 @@ def get_args():
             "DS-r1:70b",
             "qwen2.5:72b_6000",
             "llama3.3",
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "openai/gpt-oss-20b",
+            "openai/gpt-oss-120b",
+            "qwen/qwen3.8-27b",
+            "llama3.1-8b",
+            "llama-3.3-70b",
         ],
     )
     parser.add_argument("--url", type=int, default=None)
@@ -289,6 +298,8 @@ def get_args():
     parser.add_argument("--num_rounds", type=int, default=3)
     parser.add_argument("--num_times", type=int, default=1)
     parser.add_argument("--temp", type=float, default=0.7)
+    parser.add_argument("--max_tokens", type=int, default=8000)
+    parser.add_argument("--reasoning_effort", type=str, default=None)
 
     parser.add_argument("--seed", type=str, default="42")
     parser.add_argument("--baseline_bool", type=int, default=0, choices=[1, 0])
@@ -298,6 +309,7 @@ def get_args():
         "--tag", type=str, default="recover"
     )
     
+    parser.add_argument("--wandb", type=str, default="MedLA")
     parser.add_argument("--log", type=str, default=None)
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
