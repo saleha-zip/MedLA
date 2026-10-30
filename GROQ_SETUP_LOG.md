@@ -35,6 +35,7 @@ All work below was done to run the reproduction for free on **Groq** (an OpenAI-
 | `max_tokens=8000` → `max_tokens=getattr(self, "max_tokens", 8000)` in `invoke()` | Honor the new `--max_tokens` flag instead of a hardcoded value. |
 | Built `extra_kwargs` to pass `reasoning_effort` only when set, and splatted it into the chat-completions call | Send `reasoning_effort` to models that support it (gpt-oss) while omitting it for models that reject it (e.g. Llama). |
 | Set `self.max_tokens` and `self.reasoning_effort` in `Agent.__init__` from `args` | Thread the two new flags down to every agent instance. |
+| Initialize `opinion`/`reason` before the retry loops in `check_logic`, `answer_question`, `rebuttal`, `make_decision` | A failed API call raises before those vars are assigned; the `except` handlers logged them → `UnboundLocalError` that crashed the whole run. Now a transient failure degrades gracefully instead of aborting. |
 
 ### `.gitignore`
 | Change | Why |
@@ -72,4 +73,8 @@ All work below was done to run the reproduction for free on **Groq** (an OpenAI-
     --reasoning_effort low --num_agents 3 --max_tokens 1500 --debug
   ```
 - **Known limitation:** the current Groq key is a regional catalog with **no Llama-3.1-8B**, so numbers from it are *not* directly comparable to the paper (which uses LLaMA-3.1-8B). A standard global `groq.com` key (or OpenRouter's free `llama-3.1-8b-instruct`) would be needed for a paper-comparable run.
-- **Next:** instead of changing the model, scale up sample count — drop `--debug` and set `--num_samples <N>` (and raise `--num_threads` once rate limits allow) to get a real accuracy figure on gpt-oss-120b.
+- **Multi-sample results on gpt-oss-120b (MedDDx-expert, 3 agents, max_tokens 1500):**
+  - First attempt (10 samples, **3 threads**) **crashed**: gpt-oss-120b's free limit is **8000 tokens/minute total**, so 3 threads constantly hit `429`, the retries exhausted into a `ValueError`, and the unguarded `except` handlers threw `UnboundLocalError` — aborting the run after only 2 samples. Fixed by (a) the `opinion`/`reason` guards above and (b) dropping to 1 thread.
+  - Rerun (**5 samples, 1 thread**): completed cleanly — **3/5 = 60% accuracy**, 0 rate-limit errors, 0 crashes, ~1.8 min/sample. Output in `output/20261030/medddx_expert/`.
+- **Lesson:** on this free tier `--num_threads 1` is required (8000 TPM is the bottleneck, not parallelism). More threads just waste time in `429` backoff.
+- **Next:** these numbers are gpt-oss-120b, not the paper's LLaMA-3.1-8B, and n is small. For a comparable figure, obtain a Llama-3.1-8B source (standard global Groq key or OpenRouter) and rerun at 1 thread with a larger `--num_samples`.

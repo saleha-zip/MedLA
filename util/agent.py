@@ -313,6 +313,7 @@ class LogicAgent(Agent):
         )
         
         opinion_str = ""
+        opinion = ""
         reason_str = ""
         ans = ""
         retry = 0
@@ -403,6 +404,7 @@ class MedAgent_Eliminate(Agent):
         question, option_meta = question_option
         option = option_meta.copy()
         reason_dict = {}
+        reason = ""
         reason_str = ""
         message_str = ""
         retry_times = 0
@@ -452,6 +454,7 @@ class MedAgent_Eliminate(Agent):
         )
         
         opinion_str = ""
+        opinion = ""
         reason_str = ""
         ans = ""
         retry = 0
@@ -523,6 +526,7 @@ class DecisionMakersAgent(Agent):
         retry = 0
         reason_str = ""
         opinion_str = ""
+        opinion = ""
         final_decision = ""
         while len(final_decision) < 1 and retry < self.retry_times:
             retry += 1
