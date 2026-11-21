@@ -297,8 +297,8 @@ def get_args():
     parser.add_argument("--num_agents", type=int, default=17)
     parser.add_argument("--num_rounds", type=int, default=3)
     parser.add_argument("--num_times", type=int, default=1)
-    parser.add_argument("--temp", type=float, default=0.7)
-    parser.add_argument("--max_tokens", type=int, default=8000)
+    parser.add_argument("--temp", type=float, default=0.0)
+    parser.add_argument("--max_tokens", type=int, default=1024)
     parser.add_argument("--reasoning_effort", type=str, default=None)
 
     parser.add_argument("--seed", type=str, default="42")
@@ -313,7 +313,11 @@ def get_args():
     parser.add_argument("--log", type=str, default=None)
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
-    
+
+    # Provider switch: read from env (PROVIDER=groq|openai), default groq.
+    # Overrides --model so one env var flips the whole run between arms.
+    args.model = os.environ.get("PROVIDER", args.model if args.model else "groq")
+
     args.num_threads = int(os.environ.get("ADAMA_NUM_THREADS", args.num_threads))
     
     if args.model == "vllm":

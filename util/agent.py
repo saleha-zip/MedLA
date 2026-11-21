@@ -12,6 +12,7 @@ from zhipuai import ZhipuAI
 import os
 
 from .prompt import *
+from .llm_infra import guarded_create, BudgetExceeded
 
 
 def csv_to_pandas(csv_string):
@@ -121,9 +122,19 @@ class AgentHelpler:
     def __init__(self, engine, agent_name, url="http://127.0.0.1:7778") -> None:
         self.default_temp = None
         self.agent_name = agent_name + str(uuid.uuid4())[:10]
-        self.api_key = os.getenv("API_KEY", "")
+        self.provider = engine
+        # Per-provider key resolution (provider switch is driven by args.model):
+        #   groq   -> GROQ_API_KEY (falls back to legacy API_KEY)
+        #   openai -> OPENAI_API_KEY (read by the OpenAI client itself)
+        #   others -> API_KEY
+        if engine == "groq":
+            self.api_key = os.getenv("GROQ_API_KEY") or os.getenv("API_KEY", "")
+        elif engine == "openai":
+            self.api_key = os.getenv("OPENAI_API_KEY", "")
+        else:
+            self.api_key = os.getenv("API_KEY", "")
         if engine != "openai" and self.api_key == "":
-            raise ValueError("API_KEY environment variable is not set.")
+            raise ValueError(f"API key for provider '{engine}' is not set.")
         # self.encoding_tiktoken = tiktoken.encoding_for_model("gpt-4")
         if engine == "openai":
             self.client = OpenAI(
@@ -166,46 +177,30 @@ class AgentHelpler:
             raise ValueError(f"Unsupported model: {engine}")
         
     def invoke(self, llm_name, messages, temperature=None):
-        retry = 3
-        # logger.warning(temperature)
-
         if temperature is None:
-            temperature = getattr(AgentHelpler, "temp", 0.7)
+            temperature = getattr(AgentHelpler, "temp", 0.0)
         # Only sent when explicitly set (e.g. gpt-oss reasoning models);
         # omitted for models like Llama that reject the parameter.
         extra_kwargs = {}
         if getattr(self, "reasoning_effort", None):
             extra_kwargs["reasoning_effort"] = self.reasoning_effort
-        while retry > 0:
-            try:
-                response = self.client.chat.completions.create(
-                    model=llm_name,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=getattr(self, "max_tokens", 8000),
-                    **extra_kwargs
-                    )
-            except Exception as e:
-                wait = 2 ** (4 - retry) * 15
-                logger.warning(f"API error ({type(e).__name__}), waiting {wait}s: {e}")
-                sleep(wait)
-                retry -= 1
-                continue
-            # logger.error(temperature)
-            out = response.choices[0].message.content
-            
-            if out is not None:
-                break
-            sleep(10)
-            retry -= 1
-            logger.warning(f"Retrying... {retry} attempts left.")
-        else:
-            logger.error("Failed to get a response after multiple attempts.")
+        # All LLM calls funnel through the guardrail layer: cache -> budget
+        # gate -> bounded retries -> cost ledger -> hard abort at the ceiling.
+        out = guarded_create(
+            client=self.client,
+            provider=getattr(self, "provider", "groq"),
+            model=llm_name,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=getattr(self, "max_tokens", 1024),
+            extra_kwargs=extra_kwargs,
+            seed=getattr(self, "seed", 42),
+            max_retries=2,
+        )
+        if out is None:
             raise ValueError("No response from the model.")
-
         if "</think>" in out:
             out = out.split("</think>")[1]
-            
         return out
 
 
@@ -224,6 +219,7 @@ class Agent(AgentHelpler):
         self.url = args.url
         self.max_tokens = getattr(args, "max_tokens", 8000)
         self.reasoning_effort = getattr(args, "reasoning_effort", None)
+        self.seed = int(getattr(args, "seed", 42) or 42)
 
         self.logger = logger
         self.retry_times = retry_times
