@@ -1,0 +1,1 @@
+Total OpenAI spend: $2.71285 for 60 MedDDx items (gpt-4o-mini-2024-07-18, 4287 calls).
