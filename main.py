@@ -8,6 +8,7 @@ import pandas as pd
 import json
 
 import wandb
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 # from search.utils.utils import get_args
 from random import randint
@@ -57,11 +58,17 @@ def agents_talk(agent_dict, index, retry_count=[0]):
     for agent_name in random_select_agent:
         agent_dict_new[agent_name] = agent_dict[agent_name]
     
-    for agent_name, agent in agent_dict_new.items():
-        # agent = agent_dict[agent_name]
+    # Rebuttals within a round are independent across agents -> run concurrently.
+    def _rebut(agent_name, agent):
         agent_ans = agent.ans
-        ans, reason_str = agent.rebuttal(last_ans_reason_dict,retry_count=retry_count)
+        ans, reason_str = agent.rebuttal(last_ans_reason_dict, retry_count=retry_count)
         logger.warning(f"problem: {index}: discussion rebuttal {agent_name}:{agent_ans}->{ans}")
+
+    if agent_dict_new:
+        with ThreadPoolExecutor(max_workers=len(agent_dict_new)) as ex:
+            futs = [ex.submit(_rebut, n, a) for n, a in agent_dict_new.items()]
+            for f in futs:
+                f.result()  # propagate exceptions, incl. BudgetExceeded
     return agent_dict_new
 
 
@@ -110,13 +117,6 @@ def run_single_exp(question, fewshots_data, args, label, problem_index, output_p
     log_list = []
     final_decision = None
 
-    logicagent = LogicAgent(
-        args=args,
-        instruction='you are a logic agent.',
-        agent_name='LogicAgent',
-        logger=log_list,
-    )
-
     agents_data = []
     for index_agent, agent in enumerate(fewshots_data):
         agents_data.append(f"Agent {index_agent}")
@@ -136,17 +136,26 @@ def run_single_exp(question, fewshots_data, args, label, problem_index, output_p
         # logging.info(agent_new.temp)
         agent_dict[agent_name] = agent_new
 
-    for agent_idx, agent_name in enumerate(agent_dict.keys()):
-        agent_current = agent_dict[agent_name]
-        agent_current.answer_question(question, fewshots_data[agent_idx], baseline_bool=args.baseline_bool,retry_count=retry_count)
-        logic_report = logicagent.check_logic(
-            agent_current.reason,retry_count=retry_count
-        )
-        agent_current.logic_report = logic_report
-        
+    # The N agents' answer+logic calls are independent -> run them concurrently.
+    # Each worker uses its OWN LogicAgent so the shared instance isn't raced.
+    def _first_answer(agent_idx, agent_name, agent_current):
+        agent_current.answer_question(
+            question, fewshots_data[agent_idx],
+            baseline_bool=args.baseline_bool, retry_count=retry_count)
+        local_logic = LogicAgent(
+            args=args, instruction='you are a logic agent.',
+            agent_name='LogicAgent', logger=log_list)
+        agent_current.logic_report = local_logic.check_logic(
+            agent_current.reason, retry_count=retry_count)
         logger.warning(
-            f"problem: {problem_index}: first ans, {agent_name}({agent_current.ans})"
-        )
+            f"problem: {problem_index}: first ans, {agent_name}({agent_current.ans})")
+
+    agent_items = list(agent_dict.items())
+    with ThreadPoolExecutor(max_workers=len(agent_items)) as ex:
+        futs = [ex.submit(_first_answer, i, name, agent)
+                for i, (name, agent) in enumerate(agent_items)]
+        for f in futs:
+            f.result()  # propagate exceptions, incl. BudgetExceeded
     initial_answers = [agent_dict[n].ans for n in agent_dict.keys()]
     first_answer = initial_answers[0] if initial_answers else None
     rounds_run = 0
@@ -204,7 +213,8 @@ def run_single_exp(question, fewshots_data, args, label, problem_index, output_p
             "question": question[0], "options": question[1],
             "gold": label, "predicted": final_decision,
             "correct": int(final_decision == label),
-            "num_agents": len(agent_dict),
+            "num_agents": len(initial_answers),
+            "agents_after_discussion": len(agent_dict),
             "initial_answers": initial_answers,
             "first_agent_answer": first_answer,
             "agents_disagreed": int(len(set(initial_answers)) > 1),
@@ -384,6 +394,18 @@ if __name__ == "__main__":
     print("Arguments:", sys.argv[1:])
 
     args = get_args()
+
+    # Seed RNG for reproducibility (few-shot selection in rag.py uses numpy;
+    # option shuffling in agent.py uses random). temperature=0 + these seeds
+    # make a single-threaded run deterministic and cache-friendly.
+    import random as _random
+    try:
+        import numpy as _np
+        _np.random.seed(int(args.seed))
+    except Exception:
+        pass
+    _random.seed(int(args.seed))
+
     time_str = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     wandb_logger = wandb.init(

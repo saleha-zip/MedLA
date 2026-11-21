@@ -194,6 +194,7 @@ def guarded_create(client, provider, model, messages, temperature, max_tokens,
             continue
 
         content = resp.choices[0].message.content
+        finish = getattr(resp.choices[0], "finish_reason", None)
         usage = getattr(resp, "usage", None)
         pt = int(getattr(usage, "prompt_tokens", 0) or 0)
         ct = int(getattr(usage, "completion_tokens", 0) or 0)
@@ -217,6 +218,7 @@ def guarded_create(client, provider, model, messages, temperature, max_tokens,
             with open(cpath, "w") as f:
                 json.dump({"content": content,
                            "usage": {"prompt_tokens": pt, "completion_tokens": ct},
+                           "finish_reason": finish,
                            "model": model, "provider": provider}, f)
 
         # hard abort if this call pushed us to/over the ceiling.
