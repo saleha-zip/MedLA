@@ -350,20 +350,24 @@ class MedAgent_Eliminate(Agent):
         agent_name=None,
         logger=None,
         retry_times=10,
+        agent_index=0,
     ):
         agent_name = "MedAgent_" + agent_name
-        
+
         super().__init__(
             args=args,
             system_instruction=instruction,
             retry_times=retry_times,
-            agent_name=agent_name, 
-            logger=logger, 
+            agent_name=agent_name,
+            logger=logger,
         )
+        # Per-agent deterministic RNG: option-shuffle order is reproducible
+        # regardless of thread timing (temp=0 + seed => deterministic run).
+        self.rng = random.Random(f"{getattr(args, 'seed', 42)}-{agent_index}")
 
     def Eliminate_one_answer(self, question, option, examples):
-        option_keys = list(option.keys())  
-        random.shuffle(option_keys)  
+        option_keys = list(option.keys())
+        self.rng.shuffle(option_keys)
         option_str = '/'.join(option_keys)
         
         k1 = self.args.few_shots

@@ -47,7 +47,7 @@ def agents_talk(agent_dict, index, retry_count=[0]):
     random_select_agent = []
     for ans, agent_name_list in ans_dict_angent.items():
         if len(agent_name_list) > 1:
-            select_agent_index = randint(0, len(agent_name_list) - 1)
+            select_agent_index = 0  # deterministic representative (was randint)
             random_select_agent.append(agent_name_list[select_agent_index])
         else: 
             random_select_agent.append(agent_name_list[0])
@@ -132,6 +132,7 @@ def run_single_exp(question, fewshots_data, args, label, problem_index, output_p
             instruction=inst_prompt,
             agent_name=agent_name,
             logger=log_list,
+            agent_index=index_agent,
         )
         # logging.info(agent_new.temp)
         agent_dict[agent_name] = agent_new
