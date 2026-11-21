@@ -78,3 +78,22 @@ All work below was done to run the reproduction for free on **Groq** (an OpenAI-
   - Rerun (**5 samples, 1 thread**): completed cleanly — **3/5 = 60% accuracy**, 0 rate-limit errors, 0 crashes, ~1.8 min/sample. Output in `output/20261030/medddx_expert/`.
 - **Lesson:** on this free tier `--num_threads 1` is required (8000 TPM is the bottleneck, not parallelism). More threads just waste time in `429` backoff.
 - **Next:** these numbers are gpt-oss-120b, not the paper's LLaMA-3.1-8B, and n is small. For a comparable figure, obtain a Llama-3.1-8B source (standard global Groq key or OpenRouter) and rerun at 1 thread with a larger `--num_samples`.
+
+## Fidelity notes (paid-run reproduction)
+
+- **Concurrency = fidelity correction, not a perf hack.** The paper specifies
+  *"A cohort of M-Agents runs in parallel... emits a batch of syllogistic nodes
+  and directed edges in one LLM call."* Parallel independent M-Agents is the
+  design; the original sequential agent loop was the deviation. Running the
+  agents concurrently moves the implementation *toward* the paper.
+- **Multi-call elimination is upstream behavior, not a local change.** The
+  released `alexander2618/MedLA` `util/agent.py` (and our fork's base commit
+  `5c12cfc`) implement `MedAgent_Eliminate.answer_question` as an iterative
+  loop that pops the least-likely option via `Eliminate_one_answer`, i.e.
+  **n-1 LLM calls per agent** (4 for 5 options) + 1 `LogicAgent` call ≈ 4/agent.
+- **Code vs. paper discrepancy (upstream's):** the paper says each M-Agent
+  emits its tree in **one** LLM call; the released code does ~4. We faithfully
+  reproduce the released *code*, so our per-agent call count will **not** match
+  the paper's Table 5 if that table assumes the single-call design. This caveat
+  is carried into `results.md`. A paper-faithful single-call M-Agent variant
+  (~4x cheaper) is possible as a separate arm if desired.
