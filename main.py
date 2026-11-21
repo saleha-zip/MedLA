@@ -22,6 +22,7 @@ from util.agent import (
     parse_content
 )
 from util.base import base
+from util.llm_infra import set_item, item_summary, BudgetExceeded, running_total
 from util.util import alpha_lower, find_answer, check_answer_same, cal_acc
 from util.prompt import baseline_template, EXCEPTION_PROMPT, simple_answer_constrain_prompt
 
@@ -103,7 +104,8 @@ def save_log(
     )
 
 
-def run_single_exp(question, fewshots_data, args, label, problem_index, output_path,retry_all=[0],make_decision_num=[0]):
+def run_single_exp(question, fewshots_data, args, label, problem_index, output_path,retry_all=[0],make_decision_num=[0], item_id=None, tier=None):
+    set_item(item_id)  # attribute every LLM call of this item in the ledger
     retry_count=[ 0]
     log_list = []
     final_decision = None
@@ -145,6 +147,9 @@ def run_single_exp(question, fewshots_data, args, label, problem_index, output_p
         logger.warning(
             f"problem: {problem_index}: first ans, {agent_name}({agent_current.ans})"
         )
+    initial_answers = [agent_dict[n].ans for n in agent_dict.keys()]
+    first_answer = initial_answers[0] if initial_answers else None
+    rounds_run = 0
     num_rounds = args.num_rounds
     for round_n in range(num_rounds):
         ans_list_c = [agent_dict[agent_name].ans for agent_name in agent_dict.keys()]
@@ -152,6 +157,7 @@ def run_single_exp(question, fewshots_data, args, label, problem_index, output_p
 
         if not bool_ans_same:
             agent_dict = agents_talk(agent_dict, problem_index,retry_count=retry_count)
+            rounds_run += 1
         else:
             break
         logger.warning(
@@ -185,6 +191,34 @@ def run_single_exp(question, fewshots_data, args, label, problem_index, output_p
         make_decision=making_decision,
         make_decision_num=make_decision_num,
     )
+
+    # per-item deliverable record (checkpointed immediately after each item)
+    try:
+        trimmed = [
+            {"agent": e.get("agent_name"), "step": e.get("step"),
+             "answer": e.get("answer"), "output": e.get("info")}
+            for e in log_list
+        ]
+        rec = {
+            "item_id": item_id, "tier": tier,
+            "question": question[0], "options": question[1],
+            "gold": label, "predicted": final_decision,
+            "correct": int(final_decision == label),
+            "num_agents": len(agent_dict),
+            "initial_answers": initial_answers,
+            "first_agent_answer": first_answer,
+            "agents_disagreed": int(len(set(initial_answers)) > 1),
+            "rounds_run": rounds_run,
+            "made_arbitration": making_decision,
+            "discussion_changed_answer": int(final_decision != first_answer),
+            "cost": item_summary(item_id),
+            "logic_tree": trimmed,
+        }
+        per_item_path = getattr(args, "per_item", None) or "per_item.jsonl"
+        with open(per_item_path, "a") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logger.error(f"per_item write failed for {item_id}: {e}")
 
     return log_list, final_decision
 
@@ -311,6 +345,10 @@ def get_args():
     
     parser.add_argument("--wandb", type=str, default="MedLA")
     parser.add_argument("--log", type=str, default=None)
+    parser.add_argument("--sample_ids", type=str, default=None,
+                        help="Path to sample_ids.json; selects the fixed stratified sample across MedDDx tiers.")
+    parser.add_argument("--per_item", type=str, default="per_item.jsonl",
+                        help="Path to append one JSON record per evaluated item.")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
 
@@ -354,6 +392,11 @@ if __name__ == "__main__":
         config=args,
     )
 
-    cot_rag(args, wandb_logger)
-
-    wandb.finish()
+    try:
+        cot_rag(args, wandb_logger)
+    except BudgetExceeded as e:
+        logger.error(f"HARD BUDGET ABORT: {e}. "
+                     f"Partial results are checkpointed in {args.per_item} and the ledger.")
+    finally:
+        logger.info(f"Cumulative spend this project: ${running_total():.4f}")
+        wandb.finish()

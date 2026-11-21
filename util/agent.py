@@ -327,6 +327,8 @@ class LogicAgent(Agent):
                 # message = EXCEPTION_PROMPT + logic_answer_constrain_prompt + "\n" + message
                 retry_count[0]+=1
                 continue
+            except BudgetExceeded:
+                raise  # hard budget abort must never be swallowed
             except Exception as e:
                 logger.error(f"{self.agent_name} retry {retry}: unknow error - {str(e)} ")
                 break
@@ -468,6 +470,8 @@ class MedAgent_Eliminate(Agent):
                 message = EXCEPTION_PROMPT + simple_answer_constrain_prompt
                 retry_count[0]+=1
                 continue
+            except BudgetExceeded:
+                raise  # hard budget abort must never be swallowed
             except Exception as e:
                 logger.error(f"{self.agent_name} retry {retry}: unknow error - {str(e)} ")
                 break
@@ -538,6 +542,8 @@ class DecisionMakersAgent(Agent):
                 message = EXCEPTION_PROMPT
                 retry_count[0]+=1
                 continue
+            except BudgetExceeded:
+                raise  # hard budget abort must never be swallowed
             except Exception as e:
                 logger.error(f"{self.agent_name} retry {retry}: unknow error - {str(e)} ")
                 break

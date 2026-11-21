@@ -24,9 +24,33 @@ class base:
 
         self.preprocess()
 
+    def _load_fixed_sample(self, path):
+        """Load exactly the items named in sample_ids.json, across MedDDx tiers."""
+        spec = json.load(open(path))
+        tier_map = {"basic": "basic", "inter": "inter", "expert": "hard"}
+        cache = {}
+
+        def tier_items(tier):
+            if tier not in cache:
+                cache[tier], _ = load_data_medddx(tier_map[tier])
+            return cache[tier]
+
+        out = []
+        for item_id in spec["ids"]:
+            prefix, idx = item_id.split(":")
+            tier = prefix[len("medddx_"):]
+            item = dict(tier_items(tier)[int(idx)])
+            item["item_id"] = item_id
+            item["tier"] = tier
+            out.append(item)
+        logger.info(f"Loaded fixed sample: {len(out)} items from {path}")
+        return out, None
+
     def preprocess(self):
-        
-        if self.args.dataset == "medqa_us":
+
+        if getattr(self.args, "sample_ids", None):
+            test_qa, examplers = self._load_fixed_sample(self.args.sample_ids)
+        elif self.args.dataset == "medqa_us":
             test_qa, examplers = load_data_medqa_us()
         
         elif self.args.dataset == "mmlu":
@@ -79,15 +103,17 @@ class base:
         # import pdb; pdb.set_trace()
         
         if self.args.num_threads == 1:
-        # for debug
+        # sequential path: required for per-item cost attribution and determinism
             for idx in range(len(self.dataset)):
                 run_single_exp(
-                    question_list[idx], 
-                    few_shot_exp_list[idx], 
+                    question_list[idx],
+                    few_shot_exp_list[idx],
                     self.args,
                     self.dataset[idx]["answer_idx"],
                     idx,
-                    self.output_file, 
+                    self.output_file,
+                    item_id=self.dataset[idx].get("item_id"),
+                    tier=self.dataset[idx].get("tier"),
                 )
         else:        
             results = Parallel(n_jobs=self.args.num_threads, backend="threading")(

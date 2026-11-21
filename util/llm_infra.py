@@ -47,10 +47,37 @@ PRICING = {
 }
 
 LEDGER_FIELDS = [
-    "timestamp", "provider", "model",
+    "timestamp", "item_id", "provider", "model",
     "prompt_tokens", "completion_tokens",
     "cost_usd", "cache_hit", "cumulative_usd",
 ]
+
+# Which item (question) the current call belongs to, for per-item attribution.
+# Set by the orchestrator before each item; single-thread runs make this safe.
+_current = {"item_id": None}
+
+
+def set_item(item_id):
+    _current["item_id"] = item_id
+
+
+def item_summary(item_id):
+    """Aggregate ledger rows for one item: calls, tokens, cost, cache hits."""
+    s = {"calls": 0, "cache_hits": 0, "prompt_tokens": 0,
+         "completion_tokens": 0, "cost_usd": 0.0}
+    if not os.path.exists(LEDGER_PATH):
+        return s
+    with open(LEDGER_PATH, newline="") as f:
+        for row in csv.DictReader(f):
+            if row.get("item_id") != str(item_id):
+                continue
+            s["calls"] += 1
+            s["cache_hits"] += 1 if row.get("cache_hit") == "True" else 0
+            s["prompt_tokens"] += int(row.get("prompt_tokens") or 0)
+            s["completion_tokens"] += int(row.get("completion_tokens") or 0)
+            s["cost_usd"] += float(row.get("cost_usd") or 0.0)
+    s["cost_usd"] = round(s["cost_usd"], 6)
+    return s
 
 
 class BudgetExceeded(Exception):
@@ -132,6 +159,7 @@ def guarded_create(client, provider, model, messages, temperature, max_tokens,
             _load_total_locked()
             _append_ledger_locked({
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                "item_id": _current["item_id"],
                 "provider": provider, "model": model,
                 "prompt_tokens": cached.get("usage", {}).get("prompt_tokens", 0),
                 "completion_tokens": cached.get("usage", {}).get("completion_tokens", 0),
@@ -177,6 +205,7 @@ def guarded_create(client, provider, model, messages, temperature, max_tokens,
             cumulative = _total["usd"]
             _append_ledger_locked({
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                "item_id": _current["item_id"],
                 "provider": provider, "model": model,
                 "prompt_tokens": pt, "completion_tokens": ct,
                 "cost_usd": round(cost, 6), "cache_hit": False,
