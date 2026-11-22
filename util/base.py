@@ -25,7 +25,11 @@ class base:
         self.preprocess()
 
     def _load_fixed_sample(self, path):
-        """Load exactly the items named in sample_ids.json, across MedDDx tiers."""
+        """Load exactly the items named in a sample_ids file.
+
+        Supports MedDDx ids ("medddx_<tier>:<idx>", across the 3 tiers) and
+        MedQA-US ids ("medqa_us:<idx>").
+        """
         spec = json.load(open(path))
         tier_map = {"basic": "basic", "inter": "inter", "expert": "hard"}
         cache = {}
@@ -38,10 +42,16 @@ class base:
         out = []
         for item_id in spec["ids"]:
             prefix, idx = item_id.split(":")
-            tier = prefix[len("medddx_"):]
-            item = dict(tier_items(tier)[int(idx)])
+            if prefix == "medqa_us":
+                if "medqa_us" not in cache:
+                    cache["medqa_us"], _ = load_data_medqa_us()
+                item = dict(cache["medqa_us"][int(idx)])
+                item["tier"] = "medqa_us"
+            else:
+                tier = prefix[len("medddx_"):]
+                item = dict(tier_items(tier)[int(idx)])
+                item["tier"] = tier
             item["item_id"] = item_id
-            item["tier"] = tier
             out.append(item)
         logger.info(f"Loaded fixed sample: {len(out)} items from {path}")
         return out, None
