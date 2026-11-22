@@ -81,11 +81,15 @@ All work below was done to run the reproduction for free on **Groq** (an OpenAI-
 
 ## Fidelity notes (paid-run reproduction)
 
-- **Concurrency = fidelity correction, not a perf hack.** The paper specifies
-  *"A cohort of M-Agents runs in parallel... emits a batch of syllogistic nodes
-  and directed edges in one LLM call."* Parallel independent M-Agents is the
-  design; the original sequential agent loop was the deviation. Running the
-  agents concurrently moves the implementation *toward* the paper.
+- **Concurrency is an adaptation to a remote API backend — NOT a fidelity
+  correction** (correcting an earlier mischaracterization). The paper's
+  "M-Agents run in parallel / independently" describes *logical* independence
+  (no agent waits on another's output), not client-side threading. MedLA ran on
+  8×A100 under vLLM, where a serial Python loop still gets hardware parallelism
+  from server-side request batching, so their serial code was correct for their
+  deployment. Here each agent call is a network round-trip to a remote API, so
+  we thread the independent calls to recover the same wall-clock behavior. It
+  changes performance only, not the algorithm or the results.
 - **Multi-call elimination is upstream behavior, not a local change.** The
   released `alexander2618/MedLA` `util/agent.py` (and our fork's base commit
   `5c12cfc`) implement `MedAgent_Eliminate.answer_question` as an iterative
