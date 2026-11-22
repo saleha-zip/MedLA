@@ -35,6 +35,19 @@ So accuracy **decreases monotonically with true difficulty** (easiest 60% ≥ in
 
 **Why we exceed the paper (expected, not a reproduction defect):** this is a **cross-backbone** comparison. The paper's backbone is **LLaMA-3.1-8B**; ours is **gpt-4o-mini**, a substantially stronger model. We deliberately used an OpenAI model (no OpenAI model is 8B-class) to probe *where MedLA still fails even with a strong backbone*. The gap is largest on the tier MedLA calls **"Expert"** (+18.3) — but note (see the relabel above) that tier is actually KGARevion's **easiest** (Basic) tier, so the strong backbone is helping most on the *easiest* items, which is sensible. Once mapped to true difficulty, our accuracy is **monotonic** (easiest 60% ≥ hardest 50%); the earlier "inverted ordering / sampling noise" reading was an artifact of MedLA's swapped tier labels, now corrected.
 
+## Arm comparison — the headline (MedDDx, gpt-4o-mini, same fixed 60 items, temp 0)
+
+Tier columns use MedLA's labels (our "Expert" = KGARevion's *easiest*; see relabel above).
+
+| Arm | Basic | Interm. | Expert | **Overall** |
+|---|---|---|---|---|
+| S1 — single call, **direct** (no CoT) | 10/20 (50.0) | 8/20 (40.0) | 8/20 (40.0) | **43.3** |
+| S2 — single call, **CoT** | 10/20 (50.0) | 7/20 (35.0) | 12/20 (60.0) | **48.3** |
+| Majority vote of 17 agents' first answers | 7/20 (35.0) | 10/20 (50.0) | 12/20 (60.0) | **48.3** |
+| **MedLA — full, 17 agents** | 10/20 (50.0) | 10/20 (50.0) | 12/20 (60.0) | **53.3** |
+
+**Reading:** On MedDDx, the full MedLA pipeline (~71 calls/item) beats a **single CoT call (+5.0)** and a majority vote of the agents' first answers (+5.0). CoT alone lifts a direct single call by +5.0 (43.3→48.3), exactly matching majority vote; MedLA's debate/selection layer adds another +5.0 on top. So the entire multi-agent apparatus buys **+5 points over one CoT call** here — and, per `failure_analysis.md`, 57% of its remaining errors are the pipeline discarding a correct answer it already had. Whether that selection bottleneck is intrinsic to MedLA or specific to MedDDx is what the MedQA-US run (Task 3/4) tests.
+
 ## Caveats (read before citing these numbers)
 1. **Cross-backbone.** Paper = LLaMA-3.1-8B; ours = gpt-4o-mini. Not a like-for-like reproduction of the paper's absolute numbers; it reproduces the *method/pipeline*.
 2. **Small sample.** 20/tier → wide confidence intervals; treat tier differences cautiously.
