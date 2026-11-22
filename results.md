@@ -48,6 +48,28 @@ Tier columns use MedLA's labels (our "Expert" = KGARevion's *easiest*; see relab
 
 **Reading:** On MedDDx, the full MedLA pipeline (~71 calls/item) beats a **single CoT call (+5.0)** and a majority vote of the agents' first answers (+5.0). CoT alone lifts a direct single call by +5.0 (43.3→48.3), exactly matching majority vote; MedLA's debate/selection layer adds another +5.0 on top. So the entire multi-agent apparatus buys **+5 points over one CoT call** here — and, per `failure_analysis.md`, 57% of its remaining errors are the pipeline discarding a correct answer it already had. Whether that selection bottleneck is intrinsic to MedLA or specific to MedDDx is what the MedQA-US run (Task 3/4) tests.
 
+## MedQA-US arms (Task 3) — the scaffolding *hurts* a strong backbone
+
+Fixed seed-42 60-item sample of the 1,273 MedQA-US test items (`sample_ids_medqa.json`), gpt-4o-mini, temp 0, `max_output_tokens=1536`.
+
+| Arm | Ours (gpt-4o-mini, 60 items) | Paper (LLaMA-3.1-8B, full test) |
+|---|---|---|
+| Single call, direct | — (not run) | baseline **56.3** |
+| **Arm A** — single call, CoT | **80.0%** (48/60) | CoT 54.9 |
+| **Arm B** — majority vote of 17 first answers | **76.7%** (46/60) | majority voting 46.8 |
+| **Arm C** — full MedLA, 17 agents | **75.0%** (45/60) | MedLA **62.6** |
+| (other baselines) | | MedAgents 53.2 · MDAgents 53.4 · DyLAN 51.6 |
+
+**The inter-arm gap *reverses* across backbones** (this is the backbone-robust quantity — and it is not robust here):
+- Paper (LLaMA-3.1-8B, weak): MedLA − CoT = **+7.7**, MedLA − majority = **+15.8** → the scaffolding *helps* a weak model.
+- Ours (gpt-4o-mini, strong): MedLA − CoT = **−5.0**, MedLA − majority = **−1.7** → the scaffolding *hurts* a strong model.
+
+Interpretation: MedLA's elimination/debate/arbitration machinery adds value when the backbone is weak enough that cross-checking recovers errors, but on a strong backbone it mostly injects noise that pulls a good single-call answer off target. On MedQA, agents disagreed on only **28/60** (vs 50/60 on MedDDx — MedQA options are genuinely distinct, not near-synonyms), discussion changed 6 answers (**3 right / 3 wrong**, net 0), and arbitration fired **0/60**.
+
+**Selection bottleneck is intrinsic, not a MedDDx artifact (preview of Task 4):** of the 15 Arm-C failures, **11 (73%)** had the gold answer proposed by ≥1 agent and then discarded — the same aggregation-dominant pattern seen on MedDDx (57%). And Arm B (majority vote, 76.7%) *beats* Arm C (full pipeline, 75.0%), so the debate+decision layer is net-negative on this backbone. Full error-type breakdown in Task 4.
+
+**Caveats:** 60 items (wide CI); cross-backbone, so these cannot confirm/refute the paper's absolute numbers — what is measured is the **gap between arms on one backbone**, and the finding is that that gap's *sign* is backbone-dependent. Cost: Arm C $2.32, Arm A $0.015; cumulative **$5.06** of $6.00.
+
 ## Caveats (read before citing these numbers)
 1. **Cross-backbone.** Paper = LLaMA-3.1-8B; ours = gpt-4o-mini. Not a like-for-like reproduction of the paper's absolute numbers; it reproduces the *method/pipeline*.
 2. **Small sample.** 20/tier → wide confidence intervals; treat tier differences cautiously.
