@@ -14,7 +14,8 @@ item_id); enrich post-hoc for the report.
 Env: SAMPLE, PER_ITEM, TRACES, PROGRESS, CONC, MAX_ITEMS (0=all),
 and llm_infra's LEDGER_PATH / CACHE_DIR / BUDGET_USD.
 """
-import json, os, time, threading
+import json, os, time, threading, hashlib
+import numpy as np
 from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -40,6 +41,17 @@ ARGS = SimpleNamespace(model="openai", llm_name="gpt-4o-mini-2024-07-18", url=No
                        temp=0.0, few_shots=1, knowledges=0, baseline_bool=0,
                        num_rounds=3, num_agents=17, dataset="medqa_us")
 
+# qdb.get_few_shot() uses global NumPy randomness; seed it per-item (under a
+# lock) so every item's prompts are deterministic regardless of thread order.
+# This makes the cache stable -> a re-run of any item (incl. in-flight at a
+# crash) is a free cache hit, so resume never re-pays.
+_NP_LOCK = threading.Lock()
+
+def _few_shot_for(item_id, qdb):
+    with _NP_LOCK:
+        np.random.seed(int(hashlib.md5(item_id.encode()).hexdigest()[:8], 16))
+        return qdb.get_few_shot(ARGS.few_shots, ARGS.num_agents)
+
 
 def process_item(item, qdb):
     """Full MedLA pipeline for one item (mirrors main.run_single_exp, minus
@@ -47,7 +59,7 @@ def process_item(item, qdb):
     item_id = item["item_id"]
     question = (item["question"], item["options"])
     label = item["answer_idx"]
-    fewshots_data = qdb.get_few_shot(ARGS.few_shots, ARGS.num_agents)
+    fewshots_data = _few_shot_for(item_id, qdb)
     log_list = []
 
     agent_dict = {}
