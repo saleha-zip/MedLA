@@ -25,10 +25,18 @@ from datetime import datetime, timezone
 
 from loguru import logger
 
-# --- paths & config (all relative to the process CWD = repo root) -----------
-CACHE_DIR = os.path.join(os.getcwd(), "cache")
-LEDGER_PATH = os.path.join(os.getcwd(), "cost_ledger.csv")
+# --- paths & config (env-overridable so parallel runs can use a dedicated
+#     ledger while SHARING the cache dir for free cross-run cache hits) --------
+CACHE_DIR = os.getenv("CACHE_DIR") or os.path.join(os.getcwd(), "cache")
+LEDGER_PATH = os.getenv("LEDGER_PATH") or os.path.join(os.getcwd(), "cost_ledger.csv")
 BUDGET_USD = float(os.getenv("BUDGET_USD", "4.00"))
+
+# Count of 429 / rate-limit waits across the process (not errors, just waits).
+_rate_limit_hits = {"n": 0}
+
+
+def rate_limit_count():
+    return _rate_limit_hits["n"]
 
 # USD per 1,000,000 tokens as (input, output).
 # Groq free-tier models -> 0. OpenAI prices MUST be re-confirmed live before
@@ -139,14 +147,30 @@ def _append_ledger_locked(row):
         os.fsync(f.fileno())
 
 
+try:
+    from openai import RateLimitError as _RateLimitError
+except Exception:  # pragma: no cover
+    class _RateLimitError(Exception):
+        pass
+
+# Cap on rate-limit (429) waits per call so a stuck quota can't loop forever.
+_MAX_RATELIMIT_WAITS = 15
+
+
 def guarded_create(client, provider, model, messages, temperature, max_tokens,
-                   extra_kwargs=None, seed=42, max_retries=2):
+                   extra_kwargs=None, seed=42, max_retries=2, item_id=None):
     """Cache-first, budget-guarded chat-completion.
 
-    Returns the message content string, or None if all attempts failed.
-    Raises BudgetExceeded when the budget ceiling has been hit.
+    item_id: attributes the call in the ledger. Passed explicitly so it is
+    correct under item-level concurrency (the module global _current is only a
+    fallback for the legacy single-thread path).
+
+    Returns the message content string, or None if all (non-rate-limit) retries
+    failed. Raises BudgetExceeded when the budget ceiling has been hit.
+    429/rate-limit waits do NOT consume the retry budget (capped separately).
     """
     extra_kwargs = extra_kwargs or {}
+    iid = item_id if item_id is not None else _current["item_id"]
     os.makedirs(CACHE_DIR, exist_ok=True)
     key = _prompt_key(model, messages, temperature, max_tokens, extra_kwargs)
     cpath = _cache_path(key)
@@ -159,7 +183,7 @@ def guarded_create(client, provider, model, messages, temperature, max_tokens,
             _load_total_locked()
             _append_ledger_locked({
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "item_id": _current["item_id"],
+                "item_id": iid,
                 "provider": provider, "model": model,
                 "prompt_tokens": cached.get("usage", {}).get("prompt_tokens", 0),
                 "completion_tokens": cached.get("usage", {}).get("completion_tokens", 0),
@@ -175,22 +199,42 @@ def guarded_create(client, provider, model, messages, temperature, max_tokens,
             raise BudgetExceeded(
                 f"Budget ceiling reached: ${_total['usd']:.4f} >= ${BUDGET_USD:.2f}")
 
-    # 3) call with bounded retries + exponential backoff.
     call_kwargs = dict(model=model, messages=messages,
                        temperature=temperature, max_tokens=max_tokens)
     if provider in ("openai", "groq"):
         call_kwargs["seed"] = seed
     call_kwargs.update(extra_kwargs)
 
-    for attempt in range(max_retries + 1):  # 1 initial try + max_retries retries
+    # 3) call: bounded retries for real errors; unbounded-but-capped backoff
+    #    for 429s (rate-limit waits do not consume the retry budget).
+    attempt = 0          # counts non-rate-limit attempts against max_retries
+    rl_waits = 0         # counts rate-limit waits against _MAX_RATELIMIT_WAITS
+    while attempt <= max_retries:
         try:
             resp = client.chat.completions.create(**call_kwargs)
+        except _RateLimitError as e:
+            with _lock:
+                _rate_limit_hits["n"] += 1
+            rl_waits += 1
+            if rl_waits > _MAX_RATELIMIT_WAITS:
+                logger.error(f"Rate-limit waits exhausted ({rl_waits}) for {model}; moving on.")
+                return None
+            wait = min(60, 2 ** min(rl_waits, 6) * 2)  # 4,8,16,32,60,60,...
+            retry_after = getattr(getattr(e, "response", None), "headers", {})
+            try:
+                wait = max(wait, float(retry_after.get("retry-after", 0)))
+            except Exception:
+                pass
+            logger.warning(f"429 rate limit (wait #{rl_waits}, {wait:.0f}s) for {model}")
+            time.sleep(wait)
+            continue  # does NOT increment attempt
         except Exception as e:
             wait = 2 ** attempt * 5
             logger.warning(
                 f"API error ({type(e).__name__}) attempt {attempt + 1}/"
                 f"{max_retries + 1}, waiting {wait}s: {e}")
             time.sleep(wait)
+            attempt += 1
             continue
 
         content = resp.choices[0].message.content
@@ -206,14 +250,13 @@ def guarded_create(client, provider, model, messages, temperature, max_tokens,
             cumulative = _total["usd"]
             _append_ledger_locked({
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "item_id": _current["item_id"],
+                "item_id": iid,
                 "provider": provider, "model": model,
                 "prompt_tokens": pt, "completion_tokens": ct,
                 "cost_usd": round(cost, 6), "cache_hit": False,
                 "cumulative_usd": round(cumulative, 6),
             })
 
-        # cache only successful, non-empty content.
         if content is not None:
             with open(cpath, "w") as f:
                 json.dump({"content": content,
@@ -221,14 +264,13 @@ def guarded_create(client, provider, model, messages, temperature, max_tokens,
                            "finish_reason": finish,
                            "model": model, "provider": provider}, f)
 
-        # hard abort if this call pushed us to/over the ceiling.
         if cumulative >= BUDGET_USD:
             raise BudgetExceeded(
                 f"Budget ceiling reached after call: ${cumulative:.4f} >= ${BUDGET_USD:.2f}")
 
         if content is not None:
             return content
-        # empty content: fall through to retry
+        attempt += 1
         time.sleep(2 ** attempt * 5)
 
     logger.error(f"All {max_retries + 1} attempts failed for model {model}; moving on.")

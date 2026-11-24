@@ -196,6 +196,7 @@ class AgentHelpler:
             extra_kwargs=extra_kwargs,
             seed=getattr(self, "seed", 42),
             max_retries=2,
+            item_id=getattr(self, "item_id", None),
         )
         if out is None:
             raise ValueError("No response from the model.")
