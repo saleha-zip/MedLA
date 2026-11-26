@@ -95,7 +95,49 @@ Over half of sampled failures are aggregation-stage, consistent with §4. The ne
 
 ---
 
-## 6. Takeaway for the proposed framework
+## 6. Robustness — did our edits or the setup degrade MedLA unfairly?
+
+Stress-tested from every angle that could penalize MedLA relative to the CoT baseline. **It did not.** But one angle reframes the finding (see §6.3) and must be stated honestly.
+
+### 6.1 Code-edit audit (diff vs pristine upstream `82e2769`)
+Every change to the reasoning path is infra, not algorithm:
+- **Provider/key routing + guardrail funnel** (cache → budget → bounded retries → ledger). No change to prompts or decisions.
+- **Deterministic per-agent shuffle** (`random.Random(f"{seed}-{agent_index}")` replacing global `random.shuffle`): same distribution, now reproducible. **Diversity preserved** — per-slot accuracy spans 69.1–73.1 %, agents disagree initially on 44.5 % of items, and the oracle ceiling is 89.4 % (if seeding had collapsed the ensemble, oracle ≈ mean agent ≈ 71 %).
+- **Crash-fix var-inits + `except BudgetExceeded: raise`**: these paths never fired — 0/800 invalid final answers, 0/13,600 invalid agent answers.
+- **`select_agent_index = 0`** (deterministic discussion representative, was `randint`): `agents_talk` collapses agents to one representative *per distinct answer*, so this only changes which reasoning-text represents an answer cluster, never which answers are on the table.
+- The elimination / discussion / arbitration logic is otherwise identical to upstream.
+
+### 6.2 No mechanical answer-loss, no unfair asymmetry
+- **Parsing:** 0 invalid final predictions; 0/13,600 (0.00 %) invalid agent answers. MedLA is not penalized by a fragile parser.
+- **Truncation:** `max_tokens=1536` identical to Arm A. Only 61/65,323 calls (0.09 %) hit the length cap, and every one still produced a valid answer. Not material.
+- **Matched settings:** both arms use the same model, temp 0, seed 42, and max_tokens 1536. The *only* differences between Arm A and Arm C are MedLA's method itself (elimination prompt, few-shot, multi-agent, aggregation) — i.e. exactly what we intend to measure.
+- **Few-shot sanity:** the injected exemplars are well-formed worked CoT examples with correct labels, not noise.
+
+### 6.3 The decomposition that refines the thesis
+
+| Stage | Accuracy | vs previous |
+|---|---|---|
+| Single CoT call (Arm A) | **79.6 %** | — |
+| **Single MedLA agent (mean of 17)** | **71.4 %** | **−8.2** (method/prompt cost) |
+| Majority-17 (Arm B) | 72.9 % | +1.5 over mean agent |
+| **Full MedLA (Arm C)** | **74.9 %** | **+3.5 over mean agent** |
+| Oracle — any of 17 agents right | **89.4 %** | +14.5 unrealized by aggregation |
+
+Two facts that sharpen (and partly correct) the headline:
+
+1. **The ensemble is *not* destroying a good signal.** MedLA's 17-agent aggregation *beats its own single agent* (74.9 % vs 71.4 %, +3.5) and beats naive majority (+2.0). Within MedLA's own method, more agents + discussion **help**.
+2. **The dominant cause of MedLA < CoT is upstream of aggregation:** each MedLA agent, using option-elimination + few-shot scaffolding, is **~8 points weaker than a plain CoT call** on this strong backbone. gpt-4o-mini does not need the elimination scaffolding and is hurt by it. Aggregation then recovers +3.5 but cannot cover the 8-point member deficit, so the full method still lands below CoT.
+3. **The selection gap is real and large:** the ensemble contains the right answer 89.4 % of the time but realizes only 74.9 % — 14.5 points left on the table by consensus aggregation.
+
+**Honest confound (stated, not hidden):** Arm A is zero-shot CoT; a MedLA agent is elimination + 1 few-shot. So the cross-method gap (CoT vs MedLA) mixes *"ensemble overhead"* with *"prompt design."* The comparison that cleanly isolates the ensemble — single MedLA agent vs the MedLA ensemble, same prompt — shows the ensemble **winning** (+3.5). Open question still worth one cheap control run: is the 8-point per-agent deficit from the elimination framing, the few-shot, or both?
+
+### 6.4 What you can and cannot conclude
+- **Supported, robustly, not an artifact:** the full MedLA framework underperforms a simple CoT call on a strong backbone (−4.7, p = 2e-4), and this is due to MedLA's method, not our implementation.
+- **State with nuance:** it is *not* that "adding agents hurts" — MedLA's ensemble beats its own single agent. The precise claim is: **on a strong backbone, MedLA's method (elimination-style per-agent prompting + consensus aggregation) costs more and scores lower than plain CoT, because the scaffolding degrades each agent and consensus recovers only a fraction of the ensemble's 89 % oracle ceiling.** That 89 %→75 % selection gap is the opening for your framework.
+
+---
+
+## 7. Takeaway for the proposed framework
 
 1. On a capable backbone, **MedLA costs ~155× a single CoT call (\$31 vs \$0.20) to lose 4.7 points** of accuracy.
 2. The loss is not ignorance: the gold answer is in the agent pool on **59 %** of failures. The defect is **selection/aggregation**, confirmed by both the per-item diagnostic (§4) and the taxonomy (§5).
@@ -104,7 +146,7 @@ Over half of sampled failures are aggregation-stage, consistent with §4. The ne
 
 ---
 
-## 7. Reproducibility & deliverables
+## 8. Reproducibility & deliverables
 
 - Nested sample built by `build_samples_800.py` (invariants asserted: 60 ⊂ 800 ⊂ 1273, prefix-preserving).
 - Determinism: temp 0, seed 42, per-agent seeded shuffles, per-item NumPy-seeded few-shots → cache-stable (a re-run of any item is a \$0 cache hit; resume re-pays nothing — verified).
